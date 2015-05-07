@@ -236,7 +236,7 @@ func assignUser(pullReq *PullRequest, user *User) error {
 		return fmt.Errorf("unexpected response: %d", resp.StatusCode)
 	}
 	log.Printf("%s assigned to #%d issue of %q", user.Login, pullReq.Number, pullReq.Head.Repo.Name)
-	comment := fmt.Sprintf("Pull request seem to be stale, assigning @%s to be responsive for making things done.", user.Login)
+	comment := fmt.Sprintf("Pull request seem to be stale, assigning @%s as the responsible developer.", user.Login)
 	if err := writeGithubComment(pullReq, comment); err != nil {
 		log.Printf("cannot comment on %s's #%d pull request: %s", pullReq.Head.Repo.Name, pullReq.Number, err)
 	}
