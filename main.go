@@ -3,13 +3,14 @@ package main
 import (
 	"bytes"
 	"container/ring"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"sync"
 	"time"
@@ -28,10 +29,6 @@ var (
 )
 
 const botName = "optiopay-helper"
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-}
 
 type Repository struct {
 	Name            string    `json:"name"`
@@ -179,8 +176,8 @@ func nextRandomMember() (User, error) {
 		}
 
 		// skip random number of users, to not always start from the same place
-		skip := rand.Intn(len(members))
-		for i := 0; i < skip; i++ {
+		skip, _ := rand.Int(rand.Reader, big.NewInt(int64(len(members))))
+		for i := int64(0); i < skip.Int64(); i++ {
 			membersRing = membersRing.Next()
 		}
 	}
