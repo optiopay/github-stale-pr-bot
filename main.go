@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -22,98 +23,111 @@ var (
 	ghPassFl   = flag.String("pass", "", "Github password")
 	ghAuthKey  = flag.String("auth-key", "", "Github auth key")
 	ghOrgFl    = flag.String("organization", "optiopay", "Organization name as known on github")
+	ghTeamFl   = flag.String("team-id", "1070941", "The ID of the team that should get PRs assigned")
 	slackURLFl = flag.String("slack-url", "", "Slack Incomming WebHooks API URL")
 
 	staleTimeFl = flag.Duration("stale", time.Hour*24, "Time after which person is assigned to pull request")
 	oldTimeFl   = flag.Duration("old", time.Hour*24*3, "Time after which pull request is notified on slack to work on pull request")
+
+	repoRegex = regexp.MustCompile("https://github.com/(.+?)/(.+?)/.*")
+	linkRegex = regexp.MustCompile(`.*<(.+?)>; rel="next".*`)
 )
 
 const botName = "optiopay-helper"
-
-type Repository struct {
-	Name            string    `json:"name"`
-	OpenIssuesCount int       `json:"open_issues_count"`
-	UpdatedAt       time.Time `json:"updated_at"`
-}
-
-// listRepos return list of repositories with at least one open issue
-func listRepos() (repos []Repository, err error) {
-	url := fmt.Sprintf("%s/orgs/%s/repos", *ghAPIFl, *ghOrgFl)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create GET request: %s", err)
-	}
-	addAuthentication(req)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("cannot fetch response: %s", err)
-	}
-	defer resp.Body.Close()
-
-	repos = make([]Repository, 0)
-	if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
-		return nil, fmt.Errorf("cannot decode response: %s", err)
-	}
-	return repos, nil
-}
 
 type User struct {
 	ID    int64  `json:"id"`
 	Login string `json:"login"`
 }
 
-type PullRequest struct {
-	ID        int64           `json:"id"`
-	Number    int64           `json:"number"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
-	Assignee  *User           `json:"assignee"`
-	URL       string          `json:"url"`
-	HTMLURL   string          `json:"html_url"`
-	Title     string          `json:"title"`
-	State     string          `json:"state"`
-	Head      PullRequestHead `json:"head"`
+type Issue struct {
+	ID          int64        `json:"id"`
+	Number      int64        `json:"number"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
+	User        *User        `json:"user"`
+	Assignee    *User        `json:"assignee"`
+	URL         string       `json:"url"`
+	HTMLURL     string       `json:"html_url"`
+	Title       string       `json:"title"`
+	State       string       `json:"state"`
+	PullRequest *PullRequest `json:"pull_request"`
 }
 
-type PullRequestHead struct {
-	Repo Repository `json:"repo"`
-	User User       `json:"user"`
+type PullRequest struct {
+	HTMLURL string `json:"html_url"`
+}
+
+func (i *Issue) GetRepository() (string, error) {
+	list := repoRegex.FindStringSubmatch(i.HTMLURL)
+	if len(list) != 3 {
+		return "", errors.New("URL has unexpected format")
+	}
+	return list[2], nil
+}
+
+func (i *Issue) isPullRequest() bool {
+	return i.PullRequest != nil
 }
 
 // stalePullRequests return all pull requests that were created more than
 // staleTime ago.
-func stalePullRequests(staleTime time.Duration) (stale []PullRequest, err error) {
-	repos, err := listRepos()
+func stalePullRequests(staleTime time.Duration) (stale []Issue, err error) {
+	stale = make([]Issue, 0)
+
+	url := fmt.Sprintf("%s/orgs/%s/issues?filter=all&state=open", *ghAPIFl, *ghOrgFl)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("cannot list repos: %s", err)
+		return nil, fmt.Errorf("cannot create GET request: %s", err)
 	}
-	stale = make([]PullRequest, 0)
-	for _, repo := range repos {
-		if repo.OpenIssuesCount == 0 {
-			continue
-		}
-		url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open", *ghAPIFl, *ghOrgFl, repo.Name)
-		req, err := http.NewRequest("GET", url, nil)
+	addAuthentication(req)
+
+	loadIssues := func(r *http.Request) ([]Issue, string, error) {
+		resp, err := http.DefaultClient.Do(r)
 		if err != nil {
-			return nil, fmt.Errorf("cannot create GET request: %s", err)
-		}
-		addAuthentication(req)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("cannot fetch response: %s", err)
+			return nil, "", fmt.Errorf("cannot fetch response: %s", err)
 		}
 		defer resp.Body.Close()
-		prs := make([]PullRequest, 0)
-		if err := json.NewDecoder(resp.Body).Decode(&prs); err != nil {
-			return stale, fmt.Errorf("cannot decode response: %s", err)
+		var issues []Issue
+		if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
+			return nil, "", fmt.Errorf("cannot decode response: %s", err)
 		}
-		now := time.Now()
-		for _, pr := range prs {
-			if pr.CreatedAt.Add(staleTime).After(now) {
-				continue
+		list := linkRegex.FindStringSubmatch(resp.Header.Get("Link"))
+		nextURL := ""
+		if len(list) == 2 {
+			nextURL = list[1]
+		}
+		return issues, nextURL, nil
+	}
+
+	var issues []Issue
+	loadMore := true
+	for loadMore == true {
+		newIssues, nextURL, loadErr := loadIssues(req)
+		if loadErr != nil {
+			panic("Failed to load: " + loadErr.Error())
+		}
+		issues = append(issues, newIssues...)
+		if nextURL == "" {
+			loadMore = false
+		} else {
+			req, err = http.NewRequest("GET", nextURL, nil)
+			if err != nil {
+				return nil, fmt.Errorf("cannot create GET request: %s", err)
 			}
-			stale = append(stale, pr)
+			addAuthentication(req)
 		}
+	}
+
+	now := time.Now()
+	for _, issue := range issues {
+		if !issue.isPullRequest() {
+			continue
+		}
+		if issue.CreatedAt.Add(staleTime).After(now) {
+			continue
+		}
+		stale = append(stale, issue)
 	}
 	return stale, nil
 }
@@ -123,14 +137,14 @@ var (
 	membersCache []User
 )
 
-// listMembers return all organization members.
+// listMembers return all members of a given team (configured by flag).
 // Globally cached.
 func listMembers() (members []User, err error) {
 	membersMu.Lock()
 	defer membersMu.Unlock()
 
 	if membersCache == nil {
-		url := fmt.Sprintf("%s/orgs/%s/members", *ghAPIFl, *ghOrgFl)
+		url := fmt.Sprintf("%s/teams/%s/members", *ghAPIFl, *ghTeamFl)
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			return nil, fmt.Errorf("cannot create GET request: %s", err)
@@ -141,7 +155,7 @@ func listMembers() (members []User, err error) {
 			return nil, fmt.Errorf("cannot fetch response: %s", err)
 		}
 		defer resp.Body.Close()
-		members := make([]User, 0)
+		var members []User
 		if err := json.NewDecoder(resp.Body).Decode(&members); err != nil {
 			return nil, fmt.Errorf("cannot decode response: %s", err)
 		}
@@ -170,8 +184,8 @@ func nextRandomMember() (User, error) {
 			return User{}, fmt.Errorf("cannot list memebers: %s", err)
 		}
 		membersRing = ring.New(len(members))
-		for _, member := range members {
-			membersRing.Value = &member
+		for key := range members {
+			membersRing.Value = &members[key]
 			membersRing = membersRing.Next()
 		}
 
@@ -187,16 +201,20 @@ func nextRandomMember() (User, error) {
 	return *member, nil
 }
 
-func writeGithubComment(pullReq *PullRequest, comment string) error {
+func writeGithubComment(issue *Issue, comment string) error {
 	var body bytes.Buffer
 	err := json.NewEncoder(&body).Encode(map[string]interface{}{
 		"body":        comment,
-		"in_reply-to": pullReq.Number,
+		"in_reply-to": issue.Number,
 	})
 	if err != nil {
 		return fmt.Errorf("cannot JSON encode body: %s", err)
 	}
-	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", *ghAPIFl, *ghOrgFl, pullReq.Head.Repo.Name, pullReq.Number)
+	repo, repoErr := issue.GetRepository()
+	if repoErr != nil {
+		return fmt.Errorf("Cannot extract repo name from URL: %s", repoErr)
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", *ghAPIFl, *ghOrgFl, repo, issue.Number)
 	req, err := http.NewRequest("POST", url, &body)
 	if err != nil {
 		return fmt.Errorf("cannot create POST request: %s", err)
@@ -213,16 +231,17 @@ func writeGithubComment(pullReq *PullRequest, comment string) error {
 	return nil
 }
 
-func remindOnSlack(pullReq *PullRequest) error {
+func remindOnSlack(issue *Issue) error {
 	if *slackURLFl == "" {
 		return errors.New("not supported")
 	}
+	log.Printf("Reminding %s to work on PR #%d (%s)\n", issue.Assignee.Login, issue.Number, issue.Title)
 	// github login doesn't have to be slack login as well...
 	msg := map[string]interface{}{
 		"username":   "github-pr",
 		"icon_emoji": ":octocat:",
 		"text": fmt.Sprintf(`@%s, please work on <%s|Pull Request #%d> (%s)`,
-			pullReq.Head.User.Login, pullReq.HTMLURL, pullReq.Number, pullReq.Title),
+			issue.Assignee.Login, issue.HTMLURL, issue.Number, issue.Title),
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
@@ -240,7 +259,11 @@ func remindOnSlack(pullReq *PullRequest) error {
 }
 
 // assignUser assign user to given pull request issue
-func assignUser(pullReq *PullRequest, user *User) error {
+func assignUser(issue *Issue, user *User) error {
+	repo, repoErr := issue.GetRepository()
+	if repoErr != nil {
+		return fmt.Errorf("Cannot extract repo name from URL: %s", repoErr)
+	}
 	var body bytes.Buffer
 	err := json.NewEncoder(&body).Encode(map[string]interface{}{
 		"assignee": user.Login,
@@ -249,7 +272,7 @@ func assignUser(pullReq *PullRequest, user *User) error {
 		return fmt.Errorf("cannot encode body: %s", err)
 	}
 	url := fmt.Sprintf("%s/repos/%s/%s/issues/%d",
-		*ghAPIFl, *ghOrgFl, pullReq.Head.Repo.Name, pullReq.Number)
+		*ghAPIFl, *ghOrgFl, repo, issue.Number)
 	req, err := http.NewRequest("PATCH", url, &body)
 	if err != nil {
 		return fmt.Errorf("cannot create PATCH request: %s", err)
@@ -263,10 +286,10 @@ func assignUser(pullReq *PullRequest, user *User) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected response: %d", resp.StatusCode)
 	}
-	log.Printf("%s assigned to #%d issue of %q", user.Login, pullReq.Number, pullReq.Head.Repo.Name)
+	log.Printf("%s assigned to #%d issue of %q", user.Login, issue.Number, repo)
 	comment := fmt.Sprintf("Pull request seem to be stale, assigning @%s as the responsible developer.", user.Login)
-	if err := writeGithubComment(pullReq, comment); err != nil {
-		log.Printf("cannot comment on %s's #%d pull request: %s", pullReq.Head.Repo.Name, pullReq.Number, err)
+	if err := writeGithubComment(issue, comment); err != nil {
+		log.Printf("cannot comment on %s's #%d pull request: %s", repo, issue.Number, err)
 	}
 	return nil
 }
@@ -294,16 +317,16 @@ func main() {
 	for _, pr := range stale {
 		wg.Add(1)
 
-		go func(pullReq PullRequest) {
+		go func(issue Issue) {
 			defer wg.Done()
 
-			if pullReq.Assignee == nil {
+			if issue.Assignee == nil {
 				// pick random user, but do not assing owner to handle his own pull
 				// request
 				var user User
 				for {
 					user, err = nextRandomMember()
-					if user.ID != pullReq.Head.User.ID && user.Login != botName {
+					if user.ID != issue.User.ID && user.Login != botName {
 						break
 					}
 				}
@@ -311,14 +334,14 @@ func main() {
 				if err != nil {
 					log.Fatalf("cannot pick user: %s", err)
 				}
-				if err := assignUser(&pullReq, &user); err != nil {
-					log.Printf("cannot assign %q to %d: %s", user.Login, pullReq.ID, err)
+				if err := assignUser(&issue, &user); err != nil {
+					log.Printf("cannot assign %q to %d: %s", user.Login, issue.ID, err)
 				}
 				return
 			}
 
-			if *slackURLFl != "" && pr.CreatedAt.Add(*oldTimeFl).Before(now) {
-				if err := remindOnSlack(&pullReq); err != nil {
+			if *slackURLFl != "" && issue.CreatedAt.Add(*oldTimeFl).Before(now) {
+				if err := remindOnSlack(&issue); err != nil {
 					log.Printf("cannot write slack notification: %s", err)
 				}
 			}
