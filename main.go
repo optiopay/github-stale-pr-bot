@@ -13,18 +13,20 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
 
 var (
-	ghAPIFl    = flag.String("github-api", "https://api.github.com", "Github API url")
-	ghUserFl   = flag.String("user", "", "Github user name")
-	ghPassFl   = flag.String("pass", "", "Github password")
-	ghAuthKey  = flag.String("auth-key", "", "Github auth key")
-	ghOrgFl    = flag.String("organization", "optiopay", "Organization name as known on github")
-	ghTeamFl   = flag.String("team-id", "1070941", "The ID of the team that should get PRs assigned")
-	slackURLFl = flag.String("slack-url", "", "Slack Incomming WebHooks API URL")
+	ghAPIFl       = flag.String("github-api", "https://api.github.com", "Github API url")
+	ghUserFl      = flag.String("user", "", "Github user name")
+	ghPassFl      = flag.String("pass", "", "Github password")
+	ghAuthKey     = flag.String("auth-key", "", "Github auth key")
+	ghOrgFl       = flag.String("organization", "optiopay", "Organization name as known on github")
+	ghTeamFl      = flag.String("team-id", "1070941", "The ID of the team that should get PRs assigned")
+	slackURLFl    = flag.String("slack-url", "", "Slack Incomming WebHooks API URL")
+	vacationUsers = flag.String("vacation", "", "Comma-separated list of devs on vacation. Format: $login:$startdate:$enddate, e.g. MikeRoetgers:2015-05-01:2015-05-12")
 
 	staleTimeFl = flag.Duration("stale", time.Hour*24, "Time after which person is assigned to pull request")
 	oldTimeFl   = flag.Duration("old", time.Hour*24*3, "Time after which pull request is notified on slack to work on pull request")
@@ -132,6 +134,17 @@ func stalePullRequests(staleTime time.Duration) (stale []Issue, err error) {
 	return stale, nil
 }
 
+type VacationUsers []string
+
+func (u VacationUsers) Contains(entry string) bool {
+	for _, user := range u {
+		if user == entry {
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	membersMu    sync.Mutex
 	membersCache []User
@@ -158,6 +171,34 @@ func listMembers() (members []User, err error) {
 		var members []User
 		if err := json.NewDecoder(resp.Body).Decode(&members); err != nil {
 			return nil, fmt.Errorf("cannot decode response: %s", err)
+		}
+		var onVacation VacationUsers
+		now := time.Now()
+		records := strings.Split(*vacationUsers, ",")
+		for _, record := range records {
+			parts := strings.Split(record, ":")
+			if len(parts) != 3 {
+				continue
+			}
+			from, fromErr := time.Parse("2006-01-02", parts[1])
+			if fromErr != nil {
+				continue
+			}
+			to, toErr := time.Parse("2006-01-02", parts[2])
+			if toErr != nil {
+				continue
+			}
+			to = to.Add(24 * time.Hour)
+			if now.After(from) && now.Before(to) {
+				onVacation = append(onVacation, parts[0])
+			}
+		}
+		if len(onVacation) > 0 {
+			for key, user := range members {
+				if onVacation.Contains(user.Login) {
+					members = append(members[:key], members[key+1:]...)
+				}
+			}
 		}
 		membersCache = members
 	}
