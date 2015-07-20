@@ -33,7 +33,7 @@ var (
 	linkRegex = regexp.MustCompile(`.*<(.+?)>; rel="next".*`)
 )
 
-const botName = "optiopay-helper"
+const botName = "optiopay-backend-helper"
 
 type User struct {
 	ID    int64  `json:"id"`
