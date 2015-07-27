@@ -33,7 +33,10 @@ var (
 	linkRegex = regexp.MustCompile(`.*<(.+?)>; rel="next".*`)
 )
 
-const botName = "optiopay-backend-helper"
+var botNames = map[string]struct{}{
+	"optiopay-backend-helper": struct{}{},
+	"optiopay-helper":         struct{}{},
+}
 
 type User struct {
 	ID    int64  `json:"id"`
@@ -326,7 +329,8 @@ func main() {
 				var user User
 				for {
 					user, err = nextRandomMember()
-					if user.ID != issue.User.ID && user.Login != botName {
+					_, ok := botNames[user.Login]
+					if user.ID != issue.User.ID && !ok {
 						break
 					}
 				}
