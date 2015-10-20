@@ -147,7 +147,7 @@ var (
 func blacklistedMembers() map[string]bool {
 	ret := map[string]bool{}
 	buf := os.Getenv("BLACKLIST")
-	for _, login := range strings.Split(buf, ";") {
+	for _, login := range strings.Split(buf, ",") {
 		ret[login] = true
 	}
 	return ret
