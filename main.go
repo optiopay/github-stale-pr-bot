@@ -12,7 +12,9 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -140,6 +142,17 @@ var (
 	membersCache []User
 )
 
+// blacklistedMemebers returns a list of login names of members which should
+// not be included in pull requests.
+func blacklistedMembers() map[string]bool {
+	ret := map[string]bool{}
+	buf := os.Getenv("BLACKLIST")
+	for _, login := range strings.Split(buf, ";") {
+		ret[login] = true
+	}
+	return ret
+}
+
 // listMembers return all members of a given team (configured by flag).
 // Globally cached.
 func listMembers() (members []User, err error) {
@@ -162,8 +175,15 @@ func listMembers() (members []User, err error) {
 		if err := json.NewDecoder(resp.Body).Decode(&members); err != nil {
 			return nil, fmt.Errorf("cannot decode response: %s", err)
 		}
+		isBlacklisted := blacklistedMembers()
+		for i := len(members) - 1; i >= 0; i-- {
+			if isBlacklisted[members[i].Login] {
+				members = append(members[:i], members[(i+1):]...)
+			}
+		}
 		membersCache = members
 	}
+
 	return membersCache, nil
 }
 
