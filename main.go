@@ -129,9 +129,15 @@ func stalePullRequests(staleTime time.Duration) (stale []Issue, err error) {
 		if !issue.isPullRequest() {
 			continue
 		}
+		if issue.Assignee.Login == issue.User.Login {
+			// Dev's assign PR's to themselves to signal it is not ready for
+			// being merged.
+			continue
+		}
 		if issue.CreatedAt.Add(staleTime).After(now) {
 			continue
 		}
+
 		stale = append(stale, issue)
 	}
 	return stale, nil
