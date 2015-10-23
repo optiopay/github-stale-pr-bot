@@ -134,6 +134,15 @@ func stalePullRequests(staleTime time.Duration) (stale []Issue, err error) {
 		}
 		stale = append(stale, issue)
 	}
+
+	var assignedToOthers []Issuer
+	for _, issue := range stale {
+		if issue.Assignee.Login != issue.User.Login {
+			assignedToOthers = append(assignedToOthers, issue)
+		}
+	}
+	stale = assignedToOthers
+
 	return stale, nil
 }
 
