@@ -135,6 +135,8 @@ func stalePullRequests(staleTime time.Duration) (stale []Issue, err error) {
 		stale = append(stale, issue)
 	}
 
+	// Dev's assign PR's to themselves to signal it is not ready for
+	// being merged.
 	var assignedToOthers []Issue
 	for _, issue := range stale {
 		if issue.Assignee.Login != issue.User.Login {
