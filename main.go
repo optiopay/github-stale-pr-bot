@@ -135,7 +135,7 @@ func stalePullRequests(staleTime time.Duration) (stale []Issue, err error) {
 		stale = append(stale, issue)
 	}
 
-	var assignedToOthers []Issuer
+	var assignedToOthers []Issue
 	for _, issue := range stale {
 		if issue.Assignee.Login != issue.User.Login {
 			assignedToOthers = append(assignedToOthers, issue)
