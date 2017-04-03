@@ -7,9 +7,9 @@ This bot connects to the Github API and loads all Pull Requests it can find. It 
 An example crontab configuration could look like this:
 
 ```
-0 7 * * * docker rm github-stale-pr-bot; docker run --name "github-stale-pr-bot" docker-registry.optiopay.com/github-stale-pr-bot -auth-key `cat ~/.githubbot-auth-key` -slack-url `cat ~/.githubbot-slack-url`
-0 12 * * * docker rm github-stale-pr-bot; docker run --name "github-stale-pr-bot" docker-registry.optiopay.com/github-stale-pr-bot -auth-key `cat ~/.githubbot-auth-key`
-0 16 * * * docker rm github-stale-pr-bot; docker run --name "github-stale-pr-bot" docker-registry.optiopay.com/github-stale-pr-bot -auth-key `cat ~/.githubbot-auth-key`
+0 7 * * * docker rm github-stale-pr-bot; docker run --name "github-stale-pr-bot" eu.gcr.io/optiopay/github-stale-pr-bot -auth-key `cat ~/.githubbot-auth-key` -slack-url `cat ~/.githubbot-slack-url`
+0 12 * * * docker rm github-stale-pr-bot; docker run --name "github-stale-pr-bot" eu.gcr.io/optiopay/github-stale-pr-bot -auth-key `cat ~/.githubbot-auth-key`
+0 16 * * * docker rm github-stale-pr-bot; docker run --name "github-stale-pr-bot" eu.gcr.io/optiopay/github-stale-pr-bot -auth-key `cat ~/.githubbot-auth-key`
 ```
 
 With this config a Slack reminder is only send in the morning. The bot tries to assign people two more times throughout the day.
