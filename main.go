@@ -210,7 +210,7 @@ func nextRandomMember() (User, error) {
 	if membersRing == nil {
 		members, err := listMembers()
 		if err != nil {
-			return User{}, fmt.Errorf("cannot list memebers: %s", err)
+			return User{}, fmt.Errorf("cannot list members: %s", err)
 		}
 		membersRing = ring.New(len(members))
 		for key := range members {
